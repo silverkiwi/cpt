@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chart Digitizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .chart-container { position: relative; height:60vh; width:100%; max-width: 800px; margin-top: 20px; }
+        #loadingIndicator {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.8);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.5rem;
+        }
+        .spinner {
+            border: 8px solid #f3f3f3; /* Light grey */
+            border-top: 8px solid #3498db; /* Blue */
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .resizable-image-container {
+            width: 100%;
+            max-width: 600px; /* Or your preferred max width */
+            margin: 20px auto;
+            border: 1px solid #ccc;
+            overflow: hidden; /* Important for containing the image */
+        }
+        .resizable-image-container img {
+            display: block;
+            width: 100%;
+            height: auto; /* Maintain aspect ratio */
+            max-height: 70vh; /* Prevent image from becoming too tall */
+            object-fit: contain; /* Ensure the whole image is visible */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 md:p-8">
+    <div id="loadingIndicator" class="flex flex-col items-center">
+        <div class="spinner mb-4"></div>
+        <p>Processing image and extracting data...</p>
+    </div>
+
+    <div class="container mx-auto bg-white p-6 rounded-lg shadow-xl">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-700">AI Chart Digitizer</h1>
+            <p class="text-gray-500">Upload a chart image (e.g., CPT sondeergrafiek) and let AI try to extract its data and re-plot it.</p>
+        </header>
+
+        <div class="mb-6">
+            <label for="imageUpload" class="block mb-2 text-sm font-medium text-gray-700">Upload Chart Image:</label>
+            <input type="file" id="imageUpload" accept="image/*" class="block w-full text-sm text-gray-900 bg-gray-50 rounded-lg border border-gray-300 cursor-pointer focus:outline-none p-2.5">
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div>
+                <h2 class="text-xl font-semibold text-gray-700 mb-2">Original Image:</h2>
+                <div id="imagePreviewContainer" class="resizable-image-container bg-gray-200 min-h-[300px] flex items-center justify-center rounded-md">
+                    <img id="imagePreview" src="https://placehold.co/600x400/e2e8f0/9ca3af?text=Upload+Image+Here" alt="Uploaded chart" class="rounded-md"/>
+                </div>
+            </div>
+            <div>
+                <h2 class="text-xl font-semibold text-gray-700 mb-2">AI Extracted & Plotted Chart:</h2>
+                <div class="chart-container bg-gray-50 p-3 rounded-md">
+                    <canvas id="aiChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-center mb-6">
+            <button id="extractButton" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg text-lg shadow-md transition duration-150 ease-in-out disabled:opacity-50" disabled>
+                Extract Data & Plot
+            </button>
+        </div>
+
+        <div id="errorMessage" class="hidden p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+            <span class="font-medium">Error:</span> <span id="errorText"></span>
+        </div>
+
+        <div id="extractedDataContainer" class="hidden mt-6">
+            <h3 class="text-lg font-semibold text-gray-700 mb-2">Extracted Data Points (AI's interpretation):</h3>
+            <textarea id="extractedDataTextarea" rows="10" class="w-full p-2 border border-gray-300 rounded-md bg-gray-50 text-sm" readonly></textarea>
+        </div>
+
+    </div>
+
+    <script>
+        const imageUpload = document.getElementById('imageUpload');
+        const imagePreview = document.getElementById('imagePreview');
+        const imagePreviewContainer = document.getElementById('imagePreviewContainer');
+        const extractButton = document.getElementById('extractButton');
+        const aiChartCanvas = document.getElementById('aiChart');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const errorMessage = document.getElementById('errorMessage');
+        const errorText = document.getElementById('errorText');
+        const extractedDataContainer = document.getElementById('extractedDataContainer');
+        const extractedDataTextarea = document.getElementById('extractedDataTextarea');
+        let chartInstance = null;
+        let uploadedImageBase64 = null;
+
+        imageUpload.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    imagePreview.src = e.target.result;
+                    uploadedImageBase64 = e.target.result.split(',')[1]; // Get base64 part
+                    extractButton.disabled = false;
+                    errorMessage.classList.add('hidden');
+                }
+                reader.readAsDataURL(file);
+            } else {
+                imagePreview.src = 'https://placehold.co/600x400/e2e8f0/9ca3af?text=Upload+Image+Here';
+                uploadedImageBase64 = null;
+                extractButton.disabled = true;
+            }
+        });
+
+        extractButton.addEventListener('click', async function() {
+            if (!uploadedImageBase64) {
+                showError("Please upload an image first.");
+                return;
+            }
+
+            loadingIndicator.style.display = 'flex';
+            errorMessage.classList.add('hidden');
+            extractedDataContainer.classList.add('hidden');
+
+            try {
+                const prompt = `Analyze the following CPT chart image (sondeergrafiek). The primary data series represents effective cone resistance (qc) against depth. The Y-axis typically shows 'Depth in m' (often inverted, e.g., from 24m at the top down to 0m at the bottom). The X-axis shows 'Effective cone resistance (qc) in MPa' (e.g., from 0 to 30+ MPa).
+
+Extract the primary data line as a list of [depth, qc] numerical pairs.
+
+IMPORTANT: Your response must be a valid JSON object with EXACTLY this structure:
+{
+  "data_points": [
+    [depth1, qc1],
+    [depth2, qc2],
+    [depth3, qc3],
+    ...
+  ]
+}
+
+Where each [depth, qc] is an array of exactly two numbers. For example:
+{
+  "data_points": [
+    [0, 5],
+    [1, 10],
+    [2, 15]
+  ]
+}
+
+If exact values are hard to discern, provide your best estimate. Focus on the main continuous line plot. Extract at least 20 data points to get a good representation of the curve.
+
+REMEMBER: Your entire response must be ONLY the JSON object described above, with no additional text.`;
+
+                const payload = {
+                    contents: [
+                        {
+                            role: "user",
+                            parts: [
+                                { text: prompt },
+                                {
+                                    inlineData: {
+                                        mimeType: "image/png", // Assuming PNG, adjust if needed or detect dynamically
+                                        data: uploadedImageBase64
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    generationConfig: {
+                        responseMimeType: "application/json"
+                    }
+                };
+
+                // Use our local proxy endpoint instead of calling Gemini API directly
+                const apiUrl = '/api/gemini';
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorResult = await response.json();
+                    console.error("API Error Full Response:", errorResult);
+                    let detailedError = "Failed to fetch data from AI model.";
+                    if (errorResult.error && errorResult.error.message) {
+                         detailedError = errorResult.error.message;
+                    } else if (typeof errorResult === 'string') {
+                         detailedError = errorResult;
+                    }
+                    throw new Error(detailedError);
+                }
+
+                const result = await response.json();
+
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+
+                    const jsonText = result.candidates[0].content.parts[0].text;
+                    const parsedJson = JSON.parse(jsonText);
+
+                    if (parsedJson.data_points && Array.isArray(parsedJson.data_points)) {
+                        extractedDataTextarea.value = JSON.stringify(parsedJson.data_points, null, 2);
+                        extractedDataContainer.classList.remove('hidden');
+                        plotData(parsedJson.data_points);
+                    } else {
+                        throw new Error("AI model did not return data_points in the expected format.");
+                    }
+                } else {
+                     console.error("Unexpected API response structure:", result);
+                    let errorDetail = "AI model returned an unexpected response structure.";
+                    if (result.promptFeedback && result.promptFeedback.blockReason){
+                        errorDetail += ` Blocked: ${result.promptFeedback.blockReason}`;
+                         if(result.promptFeedback.blockReason === "SAFETY" && result.promptFeedback.safetyRatings) {
+                            errorDetail += ` Details: ${JSON.stringify(result.promptFeedback.safetyRatings)}`;
+                        }
+                    }
+                    throw new Error(errorDetail);
+                }
+
+            } catch (err) {
+                console.error("Error during AI data extraction:", err);
+                showError(`An error occurred: ${err.message}. Check console for more details.`);
+            } finally {
+                loadingIndicator.style.display = 'none';
+            }
+        });
+
+        function plotData(dataPoints) {
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+
+            // Assuming dataPoints is an array of [depth, qc]
+            // Chart.js expects labels (x-axis) and datasets (y-axis)
+            // For a scatter plot or line plot where X is qc and Y is depth:
+            const depths = dataPoints.map(p => p[0]);
+            const qcs = dataPoints.map(p => p[1]);
+
+            // It's common for depth to be inverted (higher values at top)
+            // and for qc to be on the x-axis.
+            // Let's prepare data for a line chart where qc is on X and depth on Y (inverted)
+            const chartData = dataPoints.map(p => ({ x: p[1], y: p[0] }));
+            // Sort by qc for a smoother line plot if qc is treated as the primary independent variable for plotting
+            // Or sort by depth if depth is the primary progression
+            chartData.sort((a, b) => a.y - b.y); // Sort by depth (ascending, so higher values appear lower on chart if not inverted)
+
+
+            const ctx = aiChartCanvas.getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line', // or 'scatter'
+                data: {
+                    datasets: [{
+                        label: 'AI Extracted Data (qc vs Depth)',
+                        data: chartData,
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.5)',
+                        tension: 0.1, // For a slightly curved line
+                        fill: false,
+                        pointRadius: 3,
+                        pointHoverRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { // qc - Effective cone resistance
+                            type: 'linear',
+                            position: 'bottom', // Or 'top' if you prefer
+                            title: {
+                                display: true,
+                                text: 'Effective cone resistance (qc) in MPa'
+                            }
+                        },
+                        y: { // Depth
+                            type: 'linear',
+                            reverse: true, // To match typical CPT charts (depth increases downwards)
+                            title: {
+                                display: true,
+                                text: 'Depth in m'
+                            }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `qc: ${context.parsed.x.toFixed(2)} MPa, Depth: ${context.parsed.y.toFixed(2)} m`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function showError(message) {
+            errorText.textContent = message;
+            errorMessage.classList.remove('hidden');
+        }
+
+    </script>
+</body>
+</html>
