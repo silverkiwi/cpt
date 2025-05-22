@@ -8,7 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: 'Inter', sans-serif; }
-        .chart-container { position: relative; height:60vh; width:100%; max-width: 800px; margin-top: 20px; }
+        /* .chart-container { position: relative; height:60vh; width:100%; max-width: 800px; margin-top: 20px; } */ /* Style moved inline for overlay */
         #loadingIndicator {
             display: none;
             position: fixed;
@@ -67,19 +67,18 @@
             <input type="file" id="imageUpload" accept="image/*" class="block w-full text-sm text-gray-900 bg-gray-50 rounded-lg border border-gray-300 cursor-pointer focus:outline-none p-2.5">
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div class="grid grid-cols-1 md:grid-cols-1 gap-6 mb-6"> <!-- Changed to single column -->
             <div>
-                <h2 class="text-xl font-semibold text-gray-700 mb-2">Original Image:</h2>
-                <div id="imagePreviewContainer" class="resizable-image-container bg-gray-200 min-h-[300px] flex items-center justify-center rounded-md">
+                <h2 class="text-xl font-semibold text-gray-700 mb-2">Original Image & AI Overlay:</h2>
+                <div id="imagePreviewContainer" class="resizable-image-container bg-gray-200 min-h-[300px] flex items-center justify-center rounded-md" style="position: relative;">
                     <img id="imagePreview" src="https://placehold.co/600x400/e2e8f0/9ca3af?text=Upload+Image+Here" alt="Uploaded chart" class="rounded-md"/>
+                    <!-- Chart container moved inside imagePreviewContainer for overlay -->
+                    <div id="chartContainer" class="chart-container" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;">
+                        <canvas id="aiChart" style="background-color: transparent; width: 100%; height: 100%;"></canvas>
+                    </div>
                 </div>
             </div>
-            <div>
-                <h2 class="text-xl font-semibold text-gray-700 mb-2">AI Extracted & Plotted Chart:</h2>
-                <div class="chart-container bg-gray-50 p-3 rounded-md">
-                    <canvas id="aiChart"></canvas>
-                </div>
-            </div>
+            <!-- The second column for a separate chart can be added back here if needed, or this can be where extracted data goes -->
         </div>
 
         <div class="text-center mb-6">
@@ -93,8 +92,11 @@
         </div>
 
         <div id="extractedDataContainer" class="hidden mt-6">
-            <h3 class="text-lg font-semibold text-gray-700 mb-2">Extracted Data Points (AI's interpretation):</h3>
-            <textarea id="extractedDataTextarea" rows="10" class="w-full p-2 border border-gray-300 rounded-md bg-gray-50 text-sm" readonly></textarea>
+            <h3 class="text-lg font-semibold text-gray-700 mb-2">Extracted Data Points (Editable):</h3>
+            <textarea id="extractedDataTextarea" rows="10" class="w-full p-2 border border-gray-300 rounded-md bg-gray-50 text-sm"></textarea>
+            <button id="replotButton" class="mt-2 bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-150 ease-in-out">
+                Update Plotted Chart
+            </button>
         </div>
 
     </div>
@@ -110,6 +112,7 @@
         const errorText = document.getElementById('errorText');
         const extractedDataContainer = document.getElementById('extractedDataContainer');
         const extractedDataTextarea = document.getElementById('extractedDataTextarea');
+        const replotButton = document.getElementById('replotButton'); // Added for re-plot
         let chartInstance = null;
         let uploadedImageBase64 = null;
 
@@ -122,10 +125,35 @@
                     uploadedImageBase64 = e.target.result.split(',')[1]; // Get base64 part
                     extractButton.disabled = false;
                     errorMessage.classList.add('hidden');
+
+                    // Ensure image is loaded before getting dimensions
+                    imagePreview.onload = () => {
+                        const imgWidth = imagePreview.offsetWidth;
+                        const imgHeight = imagePreview.offsetHeight;
+
+                        // Set canvas intrinsic size
+                        aiChartCanvas.width = imgWidth;
+                        aiChartCanvas.height = imgHeight;
+                        
+                        // If you also want to set display size via style (though 100% of parent should handle it)
+                        // aiChartCanvas.style.width = imgWidth + 'px';
+                        // aiChartCanvas.style.height = imgHeight + 'px';
+
+                        if (chartInstance) {
+                            chartInstance.resize();
+                        }
+                    };
                 }
                 reader.readAsDataURL(file);
             } else {
                 imagePreview.src = 'https://placehold.co/600x400/e2e8f0/9ca3af?text=Upload+Image+Here';
+                // Reset canvas if image is removed
+                aiChartCanvas.width = 0;
+                aiChartCanvas.height = 0;
+                if (chartInstance) {
+                    chartInstance.destroy();
+                    chartInstance = null;
+                }
                 uploadedImageBase64 = null;
                 extractButton.disabled = true;
             }
@@ -254,16 +282,26 @@ REMEMBER: Your entire response must be ONLY the JSON object described above, wit
             // Assuming dataPoints is an array of [depth, qc]
             // Chart.js expects labels (x-axis) and datasets (y-axis)
             // For a scatter plot or line plot where X is qc and Y is depth:
-            const depths = dataPoints.map(p => p[0]);
-            const qcs = dataPoints.map(p => p[1]);
+            // const depths = dataPoints.map(p => p[0]); // Not directly used for chartData structure below
+            // const qcs = dataPoints.map(p => p[1]); // Not directly used for chartData structure below
 
             // It's common for depth to be inverted (higher values at top)
             // and for qc to be on the x-axis.
             // Let's prepare data for a line chart where qc is on X and depth on Y (inverted)
             const chartData = dataPoints.map(p => ({ x: p[1], y: p[0] }));
-            // Sort by qc for a smoother line plot if qc is treated as the primary independent variable for plotting
-            // Or sort by depth if depth is the primary progression
-            chartData.sort((a, b) => a.y - b.y); // Sort by depth (ascending, so higher values appear lower on chart if not inverted)
+            // Sort by depth if depth is the primary progression.
+            // If qc is the primary progression for plotting, sort by x: chartData.sort((a, b) => a.x - b.x);
+            chartData.sort((a, b) => a.y - b.y); // Sort by depth (ascending, so higher values appear lower on chart if not inverted by scale)
+
+            // Ensure canvas is correctly sized before drawing, especially if image loaded after initial plot attempt
+            if (imagePreview.complete && imagePreview.offsetWidth > 0) {
+                 const imgWidth = imagePreview.offsetWidth;
+                 const imgHeight = imagePreview.offsetHeight;
+                 if (aiChartCanvas.width !== imgWidth || aiChartCanvas.height !== imgHeight) {
+                    aiChartCanvas.width = imgWidth;
+                    aiChartCanvas.height = imgHeight;
+                 }
+            }
 
 
             const ctx = aiChartCanvas.getContext('2d');
@@ -283,7 +321,7 @@ REMEMBER: Your entire response must be ONLY the JSON object described above, wit
                 },
                 options: {
                     responsive: true,
-                    maintainAspectRatio: false,
+                    maintainAspectRatio: false, // Important for fitting parent div
                     scales: {
                         x: { // qc - Effective cone resistance
                             type: 'linear',
@@ -303,6 +341,12 @@ REMEMBER: Your entire response must be ONLY the JSON object described above, wit
                         }
                     },
                     plugins: {
+                        legend: {
+                            display: true, // You might want to hide the legend for a cleaner overlay
+                            labels: {
+                                color: 'rgb(0, 0, 139)' // DarkBlue, just an example if you need to see it on various backgrounds
+                            }
+                        },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
@@ -310,7 +354,22 @@ REMEMBER: Your entire response must be ONLY the JSON object described above, wit
                                 }
                             }
                         }
-                    }
+                    },
+                    // Ensure chart background is transparent for overlay
+                    // Chart.js is transparent by default, but explicitly:
+                    // layout: {
+                    //     padding: 0 // No padding around chart area
+                    // },
+                    // elements: {
+                    //     line: {
+                    //         backgroundColor: 'rgba(0,0,0,0)', // For area under line if filled
+                    //         borderColor: 'rgb(75, 192, 192)'
+                    //     },
+                    //     point: {
+                    //         backgroundColor: 'rgb(75, 192, 192)',
+                    //         hoverBackgroundColor: 'rgb(75, 192, 192)'
+                    //     }
+                    // }
                 }
             });
         }
@@ -319,6 +378,34 @@ REMEMBER: Your entire response must be ONLY the JSON object described above, wit
             errorText.textContent = message;
             errorMessage.classList.remove('hidden');
         }
+
+        replotButton.addEventListener('click', function() {
+            const textareaContent = extractedDataTextarea.value;
+            let parsedData;
+
+            try {
+                parsedData = JSON.parse(textareaContent);
+            } catch (error) {
+                showError("Invalid JSON format in data points text area. Example: [[0, 5], [1, 10]]");
+                return;
+            }
+
+            const isValidStructure = Array.isArray(parsedData) &&
+                                   parsedData.every(p => 
+                                       Array.isArray(p) && 
+                                       p.length === 2 && 
+                                       typeof p[0] === 'number' && 
+                                       typeof p[1] === 'number'
+                                   );
+
+            if (!isValidStructure) {
+                showError("Data points must be an array of [depth, qc] numerical pairs. E.g., [[0, 5], [1, 10]]");
+                return;
+            }
+
+            errorMessage.classList.add('hidden'); // Hide error if validation passes
+            plotData(parsedData); // Re-plot with the edited data
+        });
 
     </script>
 </body>
